@@ -1,75 +1,103 @@
 import streamlit as st
-import PyPDF2
-import re
-import spacy
+from PyPDF2 import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import re
+import spacy
 
-# Load spaCy model
-nlp = spacy.load("en_core_web_md")
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f4f6f9;
+        padding: 2rem;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .title {
+        color: #2c3e50;
+        text-align: center;
+        font-size: 36px;
+        font-weight: bold;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: white;
+        border-radius: 12px;
+        padding: 1.2rem;
+        box-shadow: 0 0 10px rgba(0,0,0,0.07);
+        margin: 1rem 0;
+        text-align: center;
+    }
+    .metric-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #34495e;
+    }
+    .metric-value {
+        font-size: 26px;
+        color: #16a085;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-st.set_page_config(page_title="Smart Resume Matcher", layout="centered")
-st.title("📄 AI Resume Matcher")
-st.write("Upload your resume and job description to see how well they align.")
 
-# --- Helper Functions ---
-def extract_text(file):
-    reader = PyPDF2.PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text()
-    return text
+# Load SpaCy model (only once)
+@st.cache_resource
+def load_spacy_model():
+    return spacy.load("en_core_web_md")
+
+nlp = load_spacy_model()
+
+# --- Utility Functions ---
+def extract_text_from_pdf(pdf_file):
+    reader = PdfReader(pdf_file)
+    return " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
 
 def extract_keywords(text):
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
-    return list(set(words))
+    return set(re.findall(r'\b\w{3,}\b', text.lower()))
 
-def get_tfidf_score(resume, job):
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform([resume, job])
-    score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0] * 100
-    return score
+def tfidf_score(text1, text2):
+    tfidf = TfidfVectorizer(stop_words="english")
+    vectors = tfidf.fit_transform([text1, text2])
+    return cosine_similarity(vectors[0:1], vectors[1:2])[0][0] * 100
 
-def get_semantic_score(resume, job):
-    doc1 = nlp(resume)
-    doc2 = nlp(job)
+def semantic_similarity(text1, text2):
+    doc1 = nlp(text1)
+    doc2 = nlp(text2)
     return doc1.similarity(doc2) * 100
 
-# --- Upload Section ---
-resume_file = st.file_uploader("Upload your resume (PDF only)", type=["pdf"])
-job_desc = st.text_area("Paste the job description here")
+# --- UI Setup ---
+st.set_page_config(page_title="Resume Analyzer", layout="centered")
+st.markdown('<div class="title">📄 Resume Analyzer</div>', unsafe_allow_html=True)
 
-if resume_file and job_desc:
-    resume_text = extract_text(resume_file)
+resume_file = st.file_uploader("Upload Your Resume (PDF)", type=["pdf"])
+job_description = st.text_area("Paste the Job Description Here")
 
-    # Scores
-    tfidf_score = get_tfidf_score(resume_text, job_desc)
-    semantic_score = get_semantic_score(resume_text, job_desc)
-    match_percent = round((0.75 * semantic_score + 0.25 * tfidf_score), 2)
+# --- Main Logic ---
+if resume_file and job_description:
+    resume_text = extract_text_from_pdf(resume_file)
 
-    # Keyword analysis
+    # Compute Metrics
+    tfidf = tfidf_score(resume_text, job_description)
+    semantic = semantic_similarity(resume_text, job_description)
+
     resume_keywords = extract_keywords(resume_text)
-    job_keywords = extract_keywords(job_desc)
-    missing_keywords = set(job_keywords) - set(resume_keywords)
-    keyword_match_percent = (len(set(resume_keywords) & set(job_keywords)) / len(set(job_keywords))) * 100 if job_keywords else 0
+    job_keywords = extract_keywords(job_description)
+    matched = len(resume_keywords & job_keywords)
+    keyword_percent = (matched / len(job_keywords)) * 100 if job_keywords else 0
 
-    # --- Results ---
-    st.markdown("---")
-    st.subheader("📊 Match Summary")
-    st.metric("✅ Final Match Score", f"{match_percent:.2f}%")
+    combined = 0.6 * semantic + 0.2 * tfidf + 0.2 * keyword_percent
 
-    # Suggested improvements
-    if missing_keywords:
-        st.warning("🛠️ Add these keywords to improve alignment:")
-        st.write(", ".join(sorted(list(missing_keywords)[:10])))
+    # --- Display Results ---
+    st.markdown('<div class="metric-card"><div class="metric-title">🔑 Keyword Match</div><div class="metric-value">{:.2f}%</div></div>'.format(keyword_percent), unsafe_allow_html=True)
+    st.markdown('<div class="metric-card"><div class="metric-title">🧠 Semantic Similarity</div><div class="metric-value">{:.2f}%</div></div>'.format(semantic), unsafe_allow_html=True)
+    st.markdown('<div class="metric-card"><div class="metric-title">🧮 TF-IDF Similarity</div><div class="metric-value">{:.2f}%</div></div>'.format(tfidf), unsafe_allow_html=True)
+    st.markdown('<div class="metric-card"><div class="metric-title">📊 Combined Score</div><div class="metric-value">{:.2f}%</div></div>'.format(combined), unsafe_allow_html=True)
+
+    st.progress(combined / 100)
+
+    if combined > 75:
+        st.success("✅ Excellent Match - Your resume fits this role well.")
+    elif combined > 50:
+        st.warning("🟡 Partial Match - Consider tailoring your resume further.")
     else:
-        st.success("✅ Your resume already includes the key terms!")
-
-    # Optional deep dive
-    with st.expander("🔍 Show Matching Details"):
-        st.metric("🧠 Semantic Match", f"{semantic_score:.2f}%")
-        st.metric("🔑 Keyword Match", f"{keyword_match_percent:.2f}%")
-        st.metric("🧾 TF-IDF Score", f"{tfidf_score:.2f}%")
-
-    st.markdown("---")
-    st.info("💡 Tip: Tailor your resume keywords to the job description for higher ATS scores.")
+        st.error("❌ Poor Match - Improve alignment with job keywords and context.")
