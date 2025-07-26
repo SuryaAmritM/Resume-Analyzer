@@ -28,10 +28,11 @@ def get_tfidf_score(resume, jd):
     resume_lem = lemmatize_text(resume)
     jd_lem = lemmatize_text(jd)
 
-    vectorizer = TfidfVectorizer()
+    vectorizer = TfidfVectorizer(ngram_range=(1, 3))  # unigrams, bigrams, trigrams
     tfidf_matrix = vectorizer.fit_transform([resume_lem, jd_lem])
     score = (tfidf_matrix * tfidf_matrix.T).toarray()[0, 1]
     return score * 100
+
 
 # -----------------------
 # Semantic Score
