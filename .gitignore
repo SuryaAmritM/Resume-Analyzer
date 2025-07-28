@@ -1,0 +1,18 @@
+# Ignore Python virtual environments
+venv/
+env/
+
+# Ignore OS-specific files
+.DS_Store
+
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+
+# Ignore logs or temporary files
+*.log
+*.tmp
+
+# Ignore model or data folders if needed
+*.pkl
+*.csv
