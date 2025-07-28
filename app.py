@@ -3,9 +3,73 @@ import PyPDF2
 import spacy
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import os
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def get_sentence_embeddings(text):
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip().split()) > 4]
+    embeddings = st_model.encode(sentences)
+    return embeddings, sentences
+
+def clean_text(text):
+    # Remove multiple spaces, newlines, tabs, etc.
+    text = re.sub(r'\s+', ' ', text.strip())
+    return text.lower()
+
+def analyze_sentences_and_suggest(resume_text, jd_text):
+    resume_sent_embeds, resume_sents = get_sentence_embeddings(resume_text)
+    jd_sent_embeds, jd_sents = get_sentence_embeddings(jd_text)
+
+    # Document embeddings
+    resume_doc_embed = st_model.encode(resume_text, convert_to_tensor=True)
+    jd_doc_embed = st_model.encode([jd_text])[0]
+
+    # Sentence-level similarity
+    similarities = cosine_similarity(jd_sent_embeds, resume_sent_embeds)
+    best_matches = similarities.max(axis=1)
+    average_sent_score = np.mean(best_matches)
+
+    # Document-level similarity
+    doc_score = cosine_similarity([jd_doc_embed], [resume_doc_embed])[0][0]
+
+    # Combined score
+    final_score = 0.6 * doc_score + 0.4 * average_sent_score
+
+    # Suggestions
+    worst_index = best_matches.argmin()
+    missing_info = jd_sents[worst_index]
+    top_indices = best_matches.argsort()[-3:][::-1]
+    top_matches = [
+        (jd_sents[i], resume_sents[similarities[i].argmax()], best_matches[i])
+        for i in top_indices
+    ]
+
+    suggestions = f"Consider covering this in your resume: \"{missing_info}\" — it's not well matched."
+
+    return {
+        "final_score": round(final_score * 100, 2),
+        "doc_score": round(doc_score * 100, 2),
+        "sentence_score": round(average_sent_score * 100, 2),
+        "top_matches": top_matches,
+        "suggestion": suggestions
+    }
 
 # Load SpaCy model with vectors
-nlp = spacy.load("en_core_web_md")
+@st.cache_resource
+def load_spacy_model():
+    return spacy.load("en_core_web_md")
+
+@st.cache_resource
+def load_st_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+nlp = load_spacy_model()
+st_model = load_st_model()
 
 # -----------------------
 # Text Extraction
@@ -38,9 +102,9 @@ def get_tfidf_score(resume, jd):
 # Semantic Score
 # -----------------------
 def get_semantic_score(resume, jd):
-    doc1 = nlp(resume)
-    doc2 = nlp(jd)
-    return doc1.similarity(doc2) * 100
+    embeddings = st_model.encode([resume, jd])
+    similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+    return similarity * 100
 
 # -----------------------
 # Keyword Score
@@ -116,6 +180,26 @@ if resume_file and jd_text:
     with col2:
         st.markdown("<div class='card'><div class='label'>📊 TF-IDF Score</div><div class='score'>{:.2f}%</div></div>".format(tfidf_score), unsafe_allow_html=True)
         st.markdown("<div class='card'><div class='label'>🔥 Combined Score</div><div class='score'>{:.2f}%</div></div>".format(combined_score), unsafe_allow_html=True)
+
+    # Analyze top/bottom semantic matches and give suggestions
+    result = analyze_sentences_and_suggest(resume_text, jd_text)
+    top_pairs = result["top_matches"]
+    missing_info = result["suggestion"].split(":")[1].split("—")[0].strip(' "')
+    suggestions = result["suggestion"]
+
+    with st.expander("🧠 Semantic Insights"):
+        st.subheader("🔍 Most Aligned Sentences")
+        for jd_sent, res_sent, score in top_pairs:
+            st.markdown(f"**JD:** {jd_sent}")
+            st.markdown(f"**Resume:** {res_sent}")
+            st.markdown(f"**Similarity:** {score:.2f}%")
+            st.markdown("---")
+
+        st.subheader("❗ Possibly Missing or Weakly Covered JD Content")
+        st.warning(f"`{missing_info}`")
+
+        st.subheader("💡 Suggestion to Improve Resume")
+        st.info(suggestions)
 
     st.markdown("---")
     if combined_score > 75:
